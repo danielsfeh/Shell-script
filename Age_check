@@ -1,0 +1,44 @@
+*****************************************************************************************************************************
+*************************Script to check AGE ********************************************************************************
+*****************************************************************************************************************************
+
+
+
+#!/bin/bash
+
+
+echo -n " What is your year of birth?(yyyy)  "
+
+read year
+
+echo "thank you for providing give us a minute ....."
+seq 1000 2000 > ye
+
+
+grep -q $year  ye
+
+
+if
+
+[ $? -ne 0 ]
+
+
+
+then
+
+echo "please enter a valid 4 digit year of birth"
+
+else
+
+ if
+
+    [ $year -lt 1996 ]
+then
+
+echo "welcome to the store"
+
+else
+echo "sorry we can not serve you at this time "
+  fi
+fi
+
