@@ -1,0 +1,190 @@
+iptables -A INPUT -p tcp -m tcp --dport 80 -j ACCEPT
+iptables -A INPUT -p tcp -m tcp --dport 443 -j ACCEPT
+iptables -A INPUT -p tcp -m tcp --dport 22 -j ACCEPT
+
+/etc/sysconfig/iptables
+service iptables restart
+
+
+#SSL setup 
+
+yum install mod_ssl openssl
+# Generate private key 
+openssl genrsa -out ca.key 2048 
+
+# Generate CSR 
+openssl req -new -key ca.key -out ca.csr
+
+# Generate Self Signed Key
+openssl x509 -req -days 365 -in ca.csr -signkey ca.key -out ca.crt
+
+# Copy the files to the correct locations
+cp ca.crt /etc/pki/tls/certs
+cp ca.key /etc/pki/tls/private/ca.key
+cp ca.csr /etc/pki/tls/private/ca.csr
+
+
+
+Then we need to update the Apache SSL configuration file 
+
+
+vi +/SSLCertificateFile /etc/httpd/conf.d/ssl.conf
+
+
+Change the paths to match where the Key file is stored. If you've used the method above it will be 
+
+
+SSLCertificateFile /etc/pki/tls/certs/ca.crt
+
+
+Then set the correct path for the Certificate Key File a few lines below. If you've followed the instructions above it is: 
+
+
+SSLCertificateKeyFile /etc/pki/tls/private/ca.key
+
+
+Quit and save the file and then restart Apache 
+
+
+/etc/init.d/httpd restart
+
+
+
+
+
+
+3. Setting up the virtual hosts
+
+Just as you set VirtualHosts for http on port 80 so you do for https on port 443. A typical VirtualHost for a site on port 80 looks like this 
+
+
+<VirtualHost *:80>
+        <Directory /var/www/vhosts/yoursite.com/httpdocs>
+        AllowOverride All
+        </Directory>
+        DocumentRoot /var/www/vhosts/yoursite.com/httpdocs
+        ServerName yoursite.com
+</VirtualHost>
+
+
+To add a sister site on port 443 you need to add the following at the top of your file 
+
+
+NameVirtualHost *:443
+
+
+and then a VirtualHost record something like this: 
+
+
+<VirtualHost *:443>
+        SSLEngine on
+        SSLCertificateFile /etc/pki/tls/certs/ca.crt
+        SSLCertificateKeyFile /etc/pki/tls/private/ca.key
+        <Directory /var/www/vhosts/yoursite.com/httpsdocs>
+        AllowOverride All
+        </Directory>
+        DocumentRoot /var/www/vhosts/yoursite.com/httpsdocs
+        ServerName yoursite.com
+</VirtualHost>
+
+
+Restart Apache again using 
+
+
+/etc/init.d/httpd restart
+
+There are several methods of enabling a redirect from HTTP to HTTPS on Apache:
+
+1.Enable the redirect in the virtual host file for the necessary domain.
+2.Enable it in the .htaccess file (previously created in the web root folder).
+3.Use the mod_rewrite rule in the virtual host file.
+4.Use it in the .htaccess file to force HTTPS.
+
+Enabling the redirect in the virtual host file is safer and simpler than other options, as the configuration will be similar for all systems. Usually, there are two virtual host files on Apache if an SSL certificate is installed: one is for the non-secure port 80, and the other is for the secure port 443. The redirect to HTTPS can be enabled in the virtual host for port 80. If you would like to force HTTPS only for certain webpages, you can use the following set of directives:
+
+<VirtualHost *:80> 
+ServerName www.yourdomain.com 
+DocumentRoot /usr/local/apache2/htdocs 
+Redirect permanent /secure https://yourdomain.com/secure 
+</VirtualHost> 
+
+<VirtualHost _default_:443> 
+ServerName www.yourdomain.com 
+DocumentRoot /usr/local/apache2/htdocs 
+SSLEngine On 
+# ... 
+</VirtualHost> 
+
+where /secure is the directory you would like to force HTTPS for.
+
+Otherwise, a permanent redirect to HTTPS can be enabled for all the pages of the website:
+
+<VirtualHost *:80> 
+ServerName www.yourdomain.com 
+Redirect permanent / https://www.yourdomain.com/ 
+</VirtualHost> 
+
+<VirtualHost _default_:443> 
+ServerName www.yourdomain.com 
+DocumentRoot /usr/local/apache2/htdocs 
+SSLEngine On 
+# ... 
+</VirtualHost> 
+
+As an alternative, you can modify the .htaccess file. The following directive can be used in the .htaccess file placed in the document root folder of the website to secure certain pages of the website:
+
+Redirect permanent /secure https://www.yourdomain.com/secure
+
+Using the mod_rewrite rule is recommended for experienced users, as the exact configuration can be different on different systems. The syntax of mod_rewrite rules can be complicated - for example, if you would like to redirect to HTTPS certain subfolders that consist of other subfolders. If you are not sure whether mod_rewrite can be used, it is better to enable the redirect to HTTPS in the virtual host file. If you would like to create a redirect for certain pages, the mod_rewrite rule should look like this:
+
+RewriteEngine On 
+RewriteCond %{HTTPS} !=on 
+RewriteRule ^/?secure/(.*) https://%{SERVER_NAME}/secure/$1 [R,L] 
+
+The redirect for all directories is similar and looks like this: 
+
+RewriteEngine On 
+RewriteCond %{HTTPS} !=on 
+RewriteRule ^/?(.*) https://%{SERVER_NAME}/$1 [R,L] 
+
+Now your website will be available via HTTPS by default. To check if the redirects work correctly, please clear the cache in the browser you usually use and open your website or try checking it in another browser.
+
+
+
+
+https://www.digitalocean.com/community/tutorials/how-to-configure-apache-using-ansible-on-ubuntu-14-04 
+
+
+
+
+
+
+
+
+echo "Generating key request for $domain"
+ 
+#Generate a key
+openssl genrsa -des3 -passout pass:$password -out $domain.key 2048 -noout
+ 
+#Remove passphrase from the key. Comment the line out to keep the passphrase
+echo "Removing passphrase from key"
+openssl rsa -in $domain.key -passin pass:$password -out $domain.key
+ 
+#Create the request
+echo "Creating CSR"
+openssl req -new -key $domain.key -out $domain.csr -passin pass:$password \
+    -subj "/C=$country/ST=$state/L=$locality/O=$organization/OU=$organizationalunit/CN=$commonname/emailAddress=$email"
+ 
+echo "---------------------------"
+echo "-----Below is your CSR-----"
+echo "---------------------------"
+echo
+cat $domain.csr
+ 
+echo
+echo "---------------------------"
+echo "-----Below is your Key-----"
+echo "---------------------------"
+echo
+cat $domain.key
+
