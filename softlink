@@ -1,0 +1,415 @@
+#!/bin/ksh
+
+#---------------------------------------------------------------------
+# Copyright(C) The Vanguard Group
+#---------------------------------------------------------------------
+# Process Name:      WS_docroot_links.ksh
+# Syntax:            WS_docroot_links.ksh -f <ssi-file> -m <action>
+# Author:            Rajat Arora
+# Shell:             ksh
+# Description:       This script will complete steps after the docs install.
+#
+# Input Parameters:  <ssi-file> -- the full path of the SSI file
+#                    <install|undo> -- action
+#
+# Output Parameters: none
+#
+# Return Value:      exit 0 normal, exit 1 failure.
+#
+#------------------------------------------------------------------------------
+# Date           CR#          Name                Description of Change
+#------------------------------------------------------------------------------
+# 12/20/2005                  Rajat Arora         Initial Version
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+# $Date: 2014-01-09 09:59:01 -0500 (Thu, 09 Jan 2014) $
+# $Revision: 511786 $
+# $Author: ueal $
+# $HeadURL: http://prdsvnrepo:8080/svn/retail/upt/apps/agent-scripts/scripts-main/trunk/src/main/resources/bin/WS_docroot_links.ksh $
+# $Id: WS_docroot_links.ksh 142066 2012-04-12 19:05:38Z uqtm $
+#------------------------------------------------------------------------------
+
+# Allow developer to override AGENT_BASEDIR
+[ -z "$AGENT_BASEDIR" ] && AGENT_BASEDIR=$( dirname $0 )/..
+. $AGENT_BASEDIR/lib/common.ksh
+
+
+#----------------------------------------------------------------------------------------------
+# Local Function(s) Section
+#----------------------------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------------
+#    Function Name:  preinstall
+#    Input:          none
+#    Return Value:   none
+#    Description:    preliminary checks/validation done before an install is run
+#-------------------------------------------------------------------------------
+preinstall () {
+
+        # run the chkssi function for critical ssi variables
+
+        chkssi ENV_WS_DOCS_BASEDIR
+
+        if [ ! -d "${ENV_WS_DOCS_BASEDIR}" ]
+        then
+                TAS_logmsg F "Cannot create links. ENV_WS_DOCS_BASEDIR does not exist - ${ENV_WS_DOCS_BASEDIR}"
+                exit 1
+        fi
+
+        # need to loop throught the DOC root links in ssi file
+        # just warn user b/c some j2eeapps may not have these set, so can't fail out
+        /bin/grep ENV_WS_DOCROOT_LINK ${SSI_FILE} > /dev/null 2>&1
+        chkit 0 "/bin/grep ENV_WS_DOCROOT_LINK ${SSI_FILE}" info
+
+        DOC_LINKS=$(/bin/grep ENV_WS_DOCROOT_LINK ${SSI_FILE} | cut -d "=" -f1)
+
+
+       for link in $DOC_LINKS ; do
+                DOC_LINKS_VALUE=$(/bin/grep $link ${SSI_FILE} | cut -d "=" -f2)
+                if [[ $DOC_LINKS_VALUE == "" ]]; then
+                        TAS_logmsg W "Missing DOC link value: $link"
+                else
+                        TAS_logmsg I "DOC link value exists for: $link"
+                fi
+        done
+
+        # check space for ENV_WS_DOCS_BASEDIR.
+        # need to have 35mb to install docs so lets check for 40
+        checkSize ${ENV_WS_DOCS_BASEDIR} 35000
+        chkit 0 "checkSize ${ENV_WS_DOCS_BASEDIR} 35000" exit
+
+        # cleanout the payload dir incase a prior rollback failed - EE SCR 705
+        if [[ -d "${ENV_WS_DOCS_BASEDIR}/project_dir" ]]; then
+                TAS_logmsg I "Removing ${ENV_WS_DOCS_BASEDIR}/project_dir to ensure clean payload laydown ..."
+                /usr/bin/rm -rf "${ENV_WS_DOCS_BASEDIR}/project_dir"
+        fi
+
+        # cleanup any symbolic links to project_dir folders.  A new install make fail if these exist.
+        find ${ENV_WS_DOCS_BASEDIR} -type l -ls |
+        grep project_dir |
+        awk '{print $11}' |
+        while read project_dir_link
+        do
+                TAS_logmsg I "Found link to project_dir directory, $project_dir_link ... removing"
+                /bin/rm -f $project_dir_link
+        done
+
+        ####Preinstall script to remove files in ${ENV_BASEDIR}/DOCS directory
+        if [[ -d "${ENV_APPS_BASEDIR}/docs" ]]; then
+                TAS_logmsg I "Executing WS_unzip_war_jar_tar.ksh preinstall script to remove files in ${ENV_BASEDIR}/DOCS directory."
+                $AGENT_BASEDIR/bin/WS_unzip_war_jar_tar.ksh -f ${SSI_FILE} -m preinstall
+                if [ $? -ne 0 ];then
+                   TAS_logmsg F "WS_unzip_war_jar_tar.ksh preinstall __FAILED__ ."
+                   exit 1
+                else
+                   TAS_logmsg I "WS_unzip_war_jar_tar.ksh preinstall has finished executing."
+                fi
+        fi
+}
+
+#-------------------------------------------------------------------------------
+#    Function Name:  list_files
+#    Input:          directory_to_check
+#    Return Value:   true or false
+#    Description:    Function to list the files of a given directory.
+#    Source Code Credit: http://www.computing.net/unix/wwwboard/forum/6262.html
+#-------------------------------------------------------------------------------
+listfiles() {
+        ls -1 ${1:+"$@"} 2>/dev/null
+}
+
+is_dir_empty() {
+        test ! -d "$1" -o -z "$(listfiles -A $1)"
+}
+
+#-------------------------------------------------------------------------------
+#    Function Name:  create_links
+#    Input:          none
+#    Return Value:   none
+
+#    Description:    Function to create the link in ENV_WS_DOCS_BASEDIR dirctory and subsequent
+#                    directories defined by ssi variable.
+#-------------------------------------------------------------------------------
+
+create_links () {
+
+        set | egrep ^ENV_WS_DOCROOT_LINK | while read line
+        do
+                ENTRY=$(echo ${line} | /bin/cut -d "=" -f2)
+                NAME=$(echo ${ENTRY} | /bin/cut -d',' -f1)
+                TO=$(echo ${ENTRY} | /bin/cut -d',' -f2)
+                FROM=$(echo ${ENTRY} | /bin/cut -d',' -f3)
+                if [[ ${FROM} == "DOC_ROOT" ]] ; then
+                        FROM=${ENV_WS_DOCS_BASEDIR}
+                else
+                        FROM=${ENV_WS_DOCS_BASEDIR}/${FROM}
+                fi
+
+                if [[ ! -d "${FROM}" ]] ; then
+                        #Creates the ${FROM} directory if the flag is set to create.
+                        TAS_logmsg I "${FROM} doesn't exist.  Creating ${FROM}"
+                        /bin/mkdir -p ${FROM}
+                        STATUS=$?
+                        if [ $STATUS -ne 0 ]
+                        then
+                                TAS_logmsg F "Failed to created ${FROM}.  Cannot create links. ${FROM} does not exist"
+                        fi
+                fi
+
+                TAS_logmsg I "Attempting to create DOCROOT link: \n   ${FROM}/${NAME} -> \n\t$TO"
+
+                # Warn about linking to a file that doesn't exist
+                if [ ! -h ${TO} ]
+                then
+                        TAS_logmsg W "Creating link to non-existent file on $(hostname) - $TO"
+                        TAS_logmsg W "Validation of DOCROOT_LINK recommended."
+                fi
+
+                # if a link already exists, remove it
+                if [ -h ${FROM}/${NAME} ]
+                then
+                        TAS_logmsg I "Removing existing link"
+                        /bin/rm -f ${FROM}/${NAME}
+                fi
+
+                ln -s ${TO} ${FROM}/${NAME}
+                STATUS=$?
+                if [ $STATUS -ne 0 ]
+                then
+                        TAS_logmsg F "Link creation failed: ln -s $TO ${FROM}/${NAME}"
+                fi
+        done
+}
+
+#-------------------------------------------------------------------------------
+#    Function Name:  removelinks
+#    Input:          none
+#    Return Value:   none
+#    Description:    This funtion is called by undo action and removes the links
+#                    from DOCROOT.
+#------------------------------------------------------------------------------
+
+
+remove_links(){
+
+        TAS_logmsg I "Proceeding to cleanup any post-processing for the docs"
+
+        if [ -z "${ENV_WS_DOCS_BASEDIR}" ]
+        then
+                TAS_logmsg F "Cannot remove links. ENV_WS_DOCS_BASEDIR is not set."
+        fi
+
+        if [ ! -d "${ENV_WS_DOCS_BASEDIR}" ]
+        then
+                TAS_logmsg F "Cannot remove links. ENV_WS_DOCS_BASEDIR does not exist - ${ENV_WS_DOCS_BASEDIR}"
+        fi
+
+        set | grep ^ENV_WS_DOCROOT_LINK | while read link
+        do
+                ENTRY=$(echo ${link} | /bin/cut -d "=" -f2)
+                LINK_NAME=$(echo ${ENTRY} | /bin/cut -d',' -f1)
+                LINK_LOCATION=$(echo ${ENTRY} | /bin/cut -d',' -f3)
+                if [[ ${LINK_LOCATION} == "DOC_ROOT" ]] ; then
+                        FULL_LINK_LOCATION=${ENV_WS_DOCS_BASEDIR}
+                else
+                        FULL_LINK_LOCATION=${ENV_WS_DOCS_BASEDIR}/${LINK_LOCATION}
+                fi
+                if [[ -h ${FULL_LINK_LOCATION}/${LINK_NAME} ]]; then
+                        /bin/rm -f ${FULL_LINK_LOCATION}/${LINK_NAME}
+                        RC=$?
+
+                        if [ $RC -ne 0 ]
+                        then
+                                TAS_logmsg C "Failed to delete [ ${link} ]"
+                        else
+                                TAS_logmsg I "Link [ ${FULL_LINK_LOCATION}/${LINK_NAME} ] - DELETED"
+                        fi
+                else
+                        TAS_logmsg W "Link [ ${FULL_LINK_LOCATION}/${LINK_NAME} ] - SKIPPED - DOES NOT EXIST"
+                fi
+        done
+
+        find ${ENV_WS_DOCS_BASEDIR} -type d | while read dirpath
+        do
+                if [[ ${dirpath} != ${ENV_WS_DOCS_BASEDIR} ]]; then
+                        is_dir_empty ${dirpath}
+                        if [[ $? == "0" ]]; then
+                                TAS_logmsg I "Removing empty dir [ ${dirpath} ]"
+                                /bin/rmdir ${dirpath}
+                                if [[ $? == "0" ]]; then
+                                        TAS_logmsg I "Successfully removed directory [ ${dirpath} ]"
+                                else
+                                        TAS_logmsg W "Unable to remove directory [ ${dirpath} ]"
+                                fi
+                        else
+                                TAS_logmsg I "Directory [ ${dirpath} ] not empty, skipping directory deletion"
+                        fi
+                fi
+        done
+}
+
+install()
+{
+
+        # Install script to UNZIP war, jar, and tar files
+
+
+
+ if [[ -d "${ENV_APPS_BASEDIR}/docs" ]]; then
+                TAS_logmsg I "Executing WS_unzip_war_jar_tar.ksh install script to UNZIP war, jar, and tar files."
+                $( dirname $0 )/WS_unzip_war_jar_tar.ksh -f ${SSI_FILE} -m install
+                if [ $? -ne 0 ];then
+                   TAS_logmsg F "WS_unzip_war_jar_tar.ksh install __FAILED__ ."
+                   exit 1
+                else
+                   TAS_logmsg I "WS_unzip_war_jar_tar.ksh install has finished executing."
+                fi
+        fi
+
+        create_links
+
+        # Per EET SCR # 808, need to update permissions on all files to world-readable
+
+        TAS_logmsg I "=========================================================================================="
+        TAS_logmsg I "Setting world-readable permissions on all files in [ ${ENV_WS_DOCS_BASEDIR} ] ..."
+
+        find ${ENV_WS_DOCS_BASEDIR} -type f -exec chmod 644 {} \;
+
+        TAS_logmsg I "Complete setting world-readable permissions on all files in [ ${ENV_WS_DOCS_BASEDIR} ]"
+        TAS_logmsg I "=========================================================================================="
+
+        # Per EET SCR # 698, need to update permissions on cgi-bin contents to executable
+
+        TAS_logmsg I "=========================================================================================="
+        TAS_logmsg I "Setting executable permissions on cgi-bin in [ ${ENV_WS_DOCS_BASEDIR} ] ..."
+        TAS_logmsg I "=========================================================================================="
+
+        find ${ENV_WS_DOCS_BASEDIR} -type d -name cgi-bin | while read line
+        do
+                find ${line} -type f | while read filename
+                do
+                        TAS_logmsg I "[ ${filename} ]"
+                        TAS_logmsg I "BEFORE - $(ls -ld ${filename})"
+                        chmod 755 ${filename}
+                        chkit 0 "chmod 755 ${filename}" n
+                        TAS_logmsg I "AFTER  - $(ls -ld ${filename})"
+                done
+        done
+
+        TAS_logmsg I "=========================================================================================="
+        TAS_logmsg I "Complete setting executable permissions on cgi-bin in [ ${ENV_WS_DOCS_BASEDIR} ]"
+        TAS_logmsg I "=========================================================================================="
+
+
+        TAS_logmsg I "=========================================================================================="
+        TAS_logmsg I "Setting executable permissions on all .sh and .ksh files in [ ${ENV_WS_DOCS_BASEDIR} ] ..."
+        TAS_logmsg I "=========================================================================================="
+
+        find ${ENV_WS_DOCS_BASEDIR} -type f -name "*.ksh" -o -name "*.sh" | while read line
+        do
+                find ${line} -type f | while read filename
+                do
+                        TAS_logmsg I "[ ${filename} ]"
+                        TAS_logmsg I "BEFORE - $(ls -ld ${filename})"
+                        chmod 755 ${filename}
+                        chkit 0 "chmod 755 ${filename}" n
+                        TAS_logmsg I "AFTER  - $(ls -ld ${filename})"
+                done
+        done
+
+        # Per RMT0185847, need to remove and world permissions on META-INF contents
+
+ TAS_logmsg I "=========================================================================================="
+        TAS_logmsg I "Removing group and world permissions on META-INF in [ ${ENV_WS_DOCS_BASEDIR} ] ..."
+        TAS_logmsg I "=========================================================================================="
+
+        find ${ENV_WS_DOCS_BASEDIR} -type d -name META-INF | while read line
+        do
+                find ${line} -type f | while read filename
+                do
+                        TAS_logmsg I "[ ${filename} ]"
+                        TAS_logmsg I "BEFORE - $(ls -ld ${filename})"
+                        chmod 0700 ${filename}
+                        chkit 0 "chmod 0700 ${filename}" n
+                        TAS_logmsg I "AFTER  - $(ls -ld ${filename})"
+                done
+        done
+
+        TAS_logmsg I "=========================================================================================="
+        TAS_logmsg I "Complete removing group and world permissions on META-INF in [ ${ENV_WS_DOCS_BASEDIR} ]"
+        TAS_logmsg I "=========================================================================================="
+
+
+        # ENV02205:  ASB | Add 'docs to delete' ssi variable
+        if [ -n "$ENV_WS_DOCS_TO_DELETE" ]
+        then
+                TAS_logmsg I "=========================================================================================="
+                TAS_logmsg I "Deleting $ENV_WS_DOCS_TO_DELETE"
+                TAS_logmsg I "=========================================================================================="
+
+                # iterate over paths to delete
+                for doc_to_delete in $ENV_WS_DOCS_TO_DELETE
+                do
+                        TAS_logmsg I "Deleting $doc_to_delete"
+
+                        # validate that it is a docs path
+                        # we don't want to delete something else (don't delete '/'!)
+                        echo "$doc_to_delete" | egrep "^$ENV_BASEDIR" >/dev/null
+                        RC=$?
+
+                        if [ $RC -ne 0 ]
+                        then
+                                TAS_logmsg F "Cannot delete $doc_to_delete because it is not in $ENV_BASEDIR"
+                                exit 9
+                        else
+                                # delete
+                                /bin/rm -rf "$doc_to_delete"
+                                RC=$?
+
+                                # validate output
+                                if [ $RC -eq 0 ]
+                                then
+                                        TAS_logmsg I "Deleted $doc_to_delete"
+                                else
+                                        # don't fail
+                                        TAS_logmsg W "Could not delete $doc_to_delete, RC=$RC"
+                                fi
+                        fi
+                done
+
+        fi
+
+        TAS_logmsg I "=========================================================================================="
+        TAS_logmsg I "Complete setting executable permissions on all .sh and .ksh files in [ ${ENV_WS_DOCS_BASEDIR} ]"
+        TAS_logmsg I "=========================================================================================="
+
+
+     chmod 644 ${ENV_BASEDIR}/.blpkg*
+        if [ $? != 0 ] ; then
+                TAS_logmsg W "unable to chmod world readable (644) the ${ENV_BASEDIR}/.blpkg* files!"
+        fi
+
+}
+
+undo()
+{
+        remove_links
+
+        ####  Undo script to remove files in ${ENV_BASEDIR}/DOCS directory
+        if [[ -d "${ENV_APPS_BASEDIR}/docs" ]]; then
+                TAS_logmsg I "Executing WS_unzip_war_jar_tar.ksh undo script to remove files in ${ENV_BASEDIR}/DOCS directory."
+                $( dirname $0 )/WS_unzip_war_jar_tar.ksh -f ${SSI_FILE} -m undo
+                if [ $? -ne 0 ];then
+                   TAS_logmsg F "WS_unzip_war_jar_tar.ksh undo __FAILED__ ."
+                   exit 1
+                else
+                   TAS_logmsg I "WS_unzip_war_jar_tar.ksh undo has finished executing."
+                fi
+        fi
+
+}
+
+
+PACKAGE=docs
+runSkeleton $*
