@@ -1,0 +1,46 @@
+#!/bin/ksh
+#
+# findprog.ksh
+#
+platform=`hostname`
+echo "platform is: $platform"
+if [[ ${platform} != 'dssva253' ]]; then
+   echo "wrong server, dude"
+fi
+#
+runrev="$$"
+basedir="/var/Logs/ret"
+hnwbasedir="/var/Logs/ret/dev/blt/hnw/"
+hnwsiloparent=`ls -1 $hnwbasedir  | grep ^[0-9]`
+oedbasedir="/var/Logs/ret/dev/blt/oed/"
+oedsiloparent=`ls -1 $oedbasedir | grep ^[0-9]`
+appsilos="${hnwsiloparent} ${oedsiloparent}"
+#
+targetprogfile="~uvfr/bin/progtargets.txt"
+targetprogfile="/export/home/uvfr/bin/progtargets.txt"
+oedresultsfile="/tmp/findprog.results.oed.txt.$$"
+hnwresultsfile="/tmp/findprog.results.hnw.txt.$$"
+#
+for Env in dev int cat sat prf prd; do
+#for Env in dev; do
+   echo "working in Env ${Env}"
+   for App in hnw oed; do
+      echo "  working in App ${App}"
+      for appsilo in ${appsilos}; do
+          echo "     working in appsilo ${appsilo}"
+          for eachsilo in ${appsilo}; do
+              echo "            Searching Directory: ${basedir}/${Env}/blt/${App}/${eachsilo}/bltools"
+              for target in `cat ${targetprogfile}`; do
+                  echo "Searching for ${target} in ${App} ${Env} ${eachsilo}"
+                  grep ${targetfile} "${basedir}/${Env}/blt/${App}/${eachsilo}/bltools/*2017*" /dev/null 2>/dev/null | tee -a /tmp/findprog.${App}.results.${runrev}
+              done
+          done
+      done
+   done
+done
+
+
+# Searching Directory: /var/Logs/ret/ dev/ blt/ oed/ was/ bltools
+
+# /var/Logs/ret/dev/blt/oed/55/bltools
+~
